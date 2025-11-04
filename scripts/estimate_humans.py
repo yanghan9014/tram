@@ -9,6 +9,8 @@ from glob import glob
 
 from lib.models import get_hmr_vimo
 from lib.pipeline import visualize_tram
+import time
+import pdb
 
 
 parser = argparse.ArgumentParser()
@@ -39,10 +41,14 @@ tid = [k for k in tracks.keys()]
 lens = [len(trk) for trk in tracks.values()]
 rank = np.argsort(lens)[::-1]
 tracks = [tracks[tid[r]] for r in rank]
+tracks = [tracks[0]]
+# pdb.set_trace()
 
 ##### Run HPS (here we use tram) #####
 print('Estimate HPS ...')
 model = get_hmr_vimo(checkpoint='data/pretrain/vimo_checkpoint.pth.tar')
+
+start_time = time.time()
 
 for k, trk in enumerate(tracks):
     valid = np.array([t['det'] for t in trk])
@@ -56,3 +62,8 @@ for k, trk in enumerate(tracks):
     
     if k+1 >= args.max_humans:
         break
+
+end_time = time.time()
+elapsed_time = end_time - start_time
+fps = len(tracks[0]) / elapsed_time if elapsed_time > 0 else 0
+print(f"Processed {len(tracks)} tracks in {elapsed_time:.2f} seconds ({fps:.2f} FPS)")
