@@ -372,12 +372,13 @@ def load_emdb_human_world_vertices(
 
 def _load_gt_human_vertices_from_ann(ann: dict) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     smpl_data = ann.get("smpl")
+
     if not smpl_data:
         return None, None
 
-    body_pose = smpl_data.get("body_pose")
-    global_orient = smpl_data.get("global_orient")
-    transl = smpl_data.get("transl")
+    body_pose = smpl_data.get("poses_body")
+    global_orient = smpl_data.get("poses_root")
+    transl = smpl_data.get("trans")
     betas = smpl_data.get("betas")
 
     if body_pose is None or global_orient is None or transl is None:
@@ -473,15 +474,18 @@ def render_cameras_gt_traj(
             cam_R_gt = ext[:,:3,:3].transpose(0,2,1)
             cam_t_gt = np.einsum('bij, bj->bi', cam_R_gt, -ext[:, :3, -1])
 
+            gt_human_vertices_full, gt_human_faces = _load_gt_human_vertices_from_ann(ann)
+            if gt_human_vertices_full is not None:
+                # gt_human_vertices_full = np.einsum('bij, bwj->bwi', cam_R_gt, gt_human_vertices_full - cam_t_gt[:, None, :])
+                gt_human_vertices_full = gt_human_vertices_full - cam_t_gt[0, None, :]
+                gt_human_vertices_full = gt_human_vertices_full * np.array([-1.0, -1.0, 1.0], dtype=np.float32)
+                gt_human_seq_len = gt_human_vertices_full.shape[0]
+
+
             S = np.diag([-1., 1., 1.])
             cam_R_gt = np.einsum('ij,bjk->bik', S, cam_R_gt)                  # R' = S @ R_{w->c}
             cam_t_gt = np.einsum('bi,ij->bj', cam_t_gt, S)                    # t' = t_{w->c} @ S
             cam_q_gt = matrix_to_quaternion(torch.from_numpy(cam_R_gt)).numpy()
-
-            gt_human_vertices_full, gt_human_faces = _load_gt_human_vertices_from_ann(ann)
-            if gt_human_vertices_full is not None:
-                gt_human_vertices_full = gt_human_vertices_full @ S
-                gt_human_seq_len = gt_human_vertices_full.shape[0]
 
             # set gt starting point to origin
             cam_t_gt = cam_t_gt - cam_t_gt[0,:]
@@ -556,16 +560,6 @@ def render_cameras_gt_traj(
             )
         else:
             print(f"Failed to load human camera trajectory: {human_camera_path}")
-
-    stride = max(stride, 1)
-    processed_sequences: list[tuple[str, np.ndarray, np.ndarray, tuple[int, int, int]]] = []
-    for label, positions, rotations, color in traj_sequences:
-        if positions is None or rotations is None or positions.size == 0:
-            continue
-        positions_ds = positions[::stride]
-        rotations_ds = rotations[::stride]
-        processed_sequences.append((label, positions_ds, rotations_ds, color))
-
     if viser:
         import viser as viser_mod
 
@@ -609,15 +603,20 @@ def render_cameras_gt_traj(
         server = viser_mod.ViserServer()
         server.scene.set_up_direction("+y")
 
+        stride = max(stride, 1)
         pose_fps = 30.0 / stride
 
+        processed_sequences = []
         max_steps = 0
         world_origin: Optional[np.ndarray] = None
-        for label, positions_ds, _, _ in processed_sequences:
-            if positions_ds.size == 0:
+        for label, positions, rotations, color in traj_sequences:
+            if positions is None or rotations is None or positions.size == 0:
                 continue
+            positions_ds = positions[::stride]
+            rotations_ds = rotations[::stride]
             max_steps = max(max_steps, positions_ds.shape[0])
-            if label == "gt" and world_origin is None:
+            processed_sequences.append((label, positions_ds, rotations_ds, color))
+            if label == "gt" and positions_ds.shape[0] > 0 and world_origin is None:
                 world_origin = positions_ds[0]
         if world_origin is None and processed_sequences:
             world_origin = processed_sequences[0][1][0]
@@ -769,7 +768,8 @@ def render_cameras_gt_traj(
                 flat_shading=False,
                 wireframe=False,
                 opacity=0.8,
-                color=(0.78, 0.78, 0.85),
+                color=(0.0, 1.0, 1.0),
+                # color=(0.78, 0.78, 0.85),
             )
             human_mesh_handle.visible = gui_show_humans.value
 
@@ -782,7 +782,7 @@ def render_cameras_gt_traj(
                 flat_shading=False,
                 wireframe=False,
                 opacity=0.8,
-                color=(0.75, 0.55, 0.55),
+                color=(0.55, 0.55, 0.55),
             )
             gt_human_mesh_handle.visible = gui_show_gt_humans.value
 
@@ -814,7 +814,7 @@ def render_cameras_gt_traj(
                 flat_shading=False,
                 wireframe=False,
                 opacity=0.55,
-                color=(0.85, 0.85, 0.85),
+                color=(0.55, 0.55, 0.55),
             )
 
         def _update_step(step_idx: int) -> None:
@@ -1214,8 +1214,7 @@ if __name__ == "__main__":
                 human_camera_txt = candidate_camera
             elif args.viser:
                 print(f"Camera trajectory file for humans not found: {candidate_camera}")
-        import pdb
-        pdb.set_trace()
+
         render_cameras_gt_traj(
             pose_masked,
             pose_no_mask,
